@@ -4,6 +4,18 @@ use std::path::PathBuf;
 use std::process::Command;
 use tracing::info;
 
+/// Check if running as root
+fn is_root() -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Get the path to the copilotguard binary
 fn binary_path() -> Result<PathBuf> {
     std::env::current_exe().context("Failed to get current executable path")
@@ -53,15 +65,21 @@ pub fn uninstall() -> Result<()> {
 pub fn start() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("launchctl")
-            .args(["load", "-w", "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
-            .output()
-            .context("Failed to start launchd service")?;
-
-        if !output.status.success() {
-            // Try bootstrap for newer macOS
-            let _ = Command::new("sudo")
+        // Try bootstrap for newer macOS (Ventura+)
+        let bootstrap_result = if is_root() {
+            Command::new("launchctl")
+                .args(["bootstrap", "system", "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
+                .output()
+        } else {
+            Command::new("sudo")
                 .args(["launchctl", "bootstrap", "system", "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
+                .output()
+        };
+
+        if bootstrap_result.is_err() || !bootstrap_result.as_ref().unwrap().status.success() {
+            // Fallback to legacy load command
+            let _ = Command::new("launchctl")
+                .args(["load", "-w", "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
                 .output();
         }
     }
@@ -106,17 +124,20 @@ pub fn stop() -> Result<()> {
 pub fn status() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("launchctl")
-            .args(["list", "com.copilotguard.daemon"])
-            .output()
-            .context("Failed to get service status")?;
+        // Best check: try to connect to the proxy
+        let output = Command::new("curl")
+            .args(["-k", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                   "--connect-timeout", "1", "https://127.0.0.1:8443/"])
+            .output();
 
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("com.copilotguard.daemon") {
+        if let Ok(out) = output {
+            let status_code = String::from_utf8_lossy(&out.stdout);
+            // Any response (even 502) means the proxy is running
+            if out.status.success() && !status_code.is_empty() && status_code != "000" {
                 return Ok("✓ CopilotGuard is running".to_string());
             }
         }
+
         return Ok("✗ CopilotGuard is not running".to_string());
     }
 
@@ -179,26 +200,37 @@ fn install_launchd() -> Result<()> {
         binary.display()
     );
 
-    // Write plist to temp file first
-    let temp_path = "/tmp/com.copilotguard.daemon.plist";
-    fs::write(temp_path, &plist_content)?;
+    let plist_path = "/Library/LaunchDaemons/com.copilotguard.daemon.plist";
 
-    // Copy with sudo
-    let output = Command::new("sudo")
-        .args(["cp", temp_path, "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
-        .output()
-        .context("Failed to copy plist file")?;
+    if is_root() {
+        // Already root, write directly
+        fs::write(plist_path, &plist_content)
+            .context("Failed to write plist file")?;
 
-    if !output.status.success() {
-        anyhow::bail!("Failed to install launchd plist");
+        // Set ownership using chown command (fs doesn't have chown)
+        Command::new("chown")
+            .args(["root:wheel", plist_path])
+            .output()?;
+    } else {
+        // Need sudo
+        let temp_path = "/tmp/com.copilotguard.daemon.plist";
+        fs::write(temp_path, &plist_content)?;
+
+        let output = Command::new("sudo")
+            .args(["cp", temp_path, plist_path])
+            .output()
+            .context("Failed to copy plist file")?;
+
+        if !output.status.success() {
+            anyhow::bail!("Failed to install launchd plist");
+        }
+
+        Command::new("sudo")
+            .args(["chown", "root:wheel", plist_path])
+            .output()?;
+
+        fs::remove_file(temp_path)?;
     }
-
-    // Set ownership
-    Command::new("sudo")
-        .args(["chown", "root:wheel", "/Library/LaunchDaemons/com.copilotguard.daemon.plist"])
-        .output()?;
-
-    fs::remove_file(temp_path)?;
 
     info!("launchd service installed");
     Ok(())

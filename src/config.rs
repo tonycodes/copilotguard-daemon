@@ -48,11 +48,31 @@ impl Default for Config {
     }
 }
 
+/// Check if running as root
+fn is_root() -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 /// Get the config directory path
+/// Uses /etc/copilotguard when running as root (for system service)
+/// Uses ~/.config/copilotguard for regular user
 pub fn config_dir() -> Result<PathBuf> {
-    let dir = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
-        .join("copilotguard");
+    let dir = if is_root() {
+        // System-wide config for daemon running as root
+        PathBuf::from("/etc/copilotguard")
+    } else {
+        // User config
+        dirs::config_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
+            .join("copilotguard")
+    };
 
     if !dir.exists() {
         std::fs::create_dir_all(&dir)?;

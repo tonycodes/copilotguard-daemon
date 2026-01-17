@@ -2,6 +2,18 @@ use anyhow::{Context, Result};
 use std::fs;
 use tracing::info;
 
+/// Check if running as root
+fn is_root() -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::getuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 const HOSTS_PATH: &str = if cfg!(windows) {
     r"C:\Windows\System32\drivers\etc\hosts"
 } else {
@@ -46,18 +58,24 @@ pub fn install() -> Result<()> {
 
     #[cfg(unix)]
     {
-        use std::process::Command;
-        // Write to temp file first, then copy with sudo
-        fs::write("/tmp/copilotguard_hosts", &new_content)?;
-        let output = Command::new("sudo")
-            .args(["cp", "/tmp/copilotguard_hosts", HOSTS_PATH])
-            .output()
-            .context("Failed to update hosts file")?;
+        if is_root() {
+            // Already root, write directly
+            fs::write(HOSTS_PATH, &new_content)
+                .context("Failed to write hosts file")?;
+        } else {
+            use std::process::Command;
+            // Write to temp file first, then copy with sudo
+            fs::write("/tmp/copilotguard_hosts", &new_content)?;
+            let output = Command::new("sudo")
+                .args(["cp", "/tmp/copilotguard_hosts", HOSTS_PATH])
+                .output()
+                .context("Failed to update hosts file")?;
 
-        if !output.status.success() {
-            anyhow::bail!("Failed to write hosts file");
+            if !output.status.success() {
+                anyhow::bail!("Failed to write hosts file");
+            }
+            fs::remove_file("/tmp/copilotguard_hosts")?;
         }
-        fs::remove_file("/tmp/copilotguard_hosts")?;
     }
 
     #[cfg(windows)]
@@ -88,17 +106,22 @@ pub fn uninstall() -> Result<()> {
 
     #[cfg(unix)]
     {
-        use std::process::Command;
-        fs::write("/tmp/copilotguard_hosts", &new_content)?;
-        let output = Command::new("sudo")
-            .args(["cp", "/tmp/copilotguard_hosts", HOSTS_PATH])
-            .output()
-            .context("Failed to restore hosts file")?;
+        if is_root() {
+            fs::write(HOSTS_PATH, &new_content)
+                .context("Failed to restore hosts file")?;
+        } else {
+            use std::process::Command;
+            fs::write("/tmp/copilotguard_hosts", &new_content)?;
+            let output = Command::new("sudo")
+                .args(["cp", "/tmp/copilotguard_hosts", HOSTS_PATH])
+                .output()
+                .context("Failed to restore hosts file")?;
 
-        if !output.status.success() {
-            anyhow::bail!("Failed to restore hosts file");
+            if !output.status.success() {
+                anyhow::bail!("Failed to restore hosts file");
+            }
+            fs::remove_file("/tmp/copilotguard_hosts")?;
         }
-        fs::remove_file("/tmp/copilotguard_hosts")?;
     }
 
     #[cfg(windows)]
