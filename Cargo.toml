@@ -1,0 +1,68 @@
+[package]
+name = "copilotguard-daemon"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight daemon for intercepting and analyzing AI coding assistant traffic"
+license = "MIT"
+repository = "https://github.com/tonysnark/copilotguard-daemon"
+readme = "README.md"
+
+[[bin]]
+name = "copilotguard"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP/HTTPS proxy
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+
+# TLS/SSL
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+rcgen = "0.13"  # Certificate generation
+x509-parser = "0.16"
+
+# Time handling
+time = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dirs = "5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# System integration
+daemonize = "0.5"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Platform-specific
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-specific deps if needed
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-service = "0.7"
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Link-time optimization
+codegen-units = 1   # Single codegen unit for better optimization
+panic = "abort"     # Smaller binary
+strip = true        # Strip symbols
