@@ -59,6 +59,12 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install the default crypto provider for rustls
+    // This must be done before any TLS operations
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install crypto provider");
+
     // Initialize logging
     FmtSubscriber::builder()
         .with_max_level(Level::INFO)

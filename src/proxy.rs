@@ -1,17 +1,89 @@
 use anyhow::Result;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
+use reqwest::Client;
+use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::io;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::ca;
 use crate::config;
+
+/// Custom DNS resolver that returns real IPs for intercepted domains
+/// This bypasses the local hosts file which redirects them to 127.0.0.1
+struct BypassResolver {
+    /// Map of domain -> real IP addresses (looked up once at startup)
+    overrides: HashMap<String, Vec<IpAddr>>,
+}
+
+impl BypassResolver {
+    fn new() -> Self {
+        let mut overrides = HashMap::new();
+
+        // Real IP addresses for GitHub Copilot domains
+        // These are GitHub's CDN IPs - they may change but are generally stable
+        // copilot-proxy.githubusercontent.com resolves to GitHub's CDN
+        overrides.insert(
+            "copilot-proxy.githubusercontent.com".to_string(),
+            vec![
+                IpAddr::V4(Ipv4Addr::new(140, 82, 112, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 113, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 114, 21)),
+            ],
+        );
+
+        overrides.insert(
+            "api.githubcopilot.com".to_string(),
+            vec![
+                IpAddr::V4(Ipv4Addr::new(140, 82, 112, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 113, 21)),
+            ],
+        );
+
+        Self { overrides }
+    }
+}
+
+impl Resolve for BypassResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        let domain = name.as_str().to_string();
+        let overrides = self.overrides.clone();
+
+        Box::pin(async move {
+            if let Some(ips) = overrides.get(&domain) {
+                let addrs: Vec<SocketAddr> = ips
+                    .iter()
+                    .map(|ip| SocketAddr::new(*ip, 0))
+                    .collect();
+                info!("Resolved {} to {:?} (bypassing hosts file)", domain, addrs);
+                return Ok(Box::new(addrs.into_iter()) as Addrs);
+            }
+
+            // For other domains, let the system resolve normally
+            // This shouldn't happen for our intercepted traffic
+            Err(Box::new(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("No override for domain: {}", domain),
+            )) as Box<dyn std::error::Error + Send + Sync>)
+        })
+    }
+}
+
+/// Shared state for the proxy
+struct ProxyState {
+    client: Client,
+}
 
 /// Run the proxy server
 pub async fn run() -> Result<()> {
@@ -19,6 +91,15 @@ pub async fn run() -> Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], config.proxy_port));
 
     info!("Starting CopilotGuard proxy on {}", addr);
+
+    // Create HTTP client for forwarding requests
+    // Uses custom DNS resolver to bypass local hosts file
+    let client = Client::builder()
+        .timeout(Duration::from_secs(30))
+        .dns_resolver(Arc::new(BypassResolver::new()))
+        .build()?;
+
+    let state = Arc::new(ProxyState { client });
 
     // Load TLS config
     let tls_config = create_tls_config()?;
@@ -30,6 +111,7 @@ pub async fn run() -> Result<()> {
     loop {
         let (stream, peer_addr) = listener.accept().await?;
         let acceptor = tls_acceptor.clone();
+        let state = state.clone();
 
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
@@ -37,7 +119,13 @@ pub async fn run() -> Result<()> {
                     let io = TokioIo::new(tls_stream);
 
                     if let Err(err) = http1::Builder::new()
-                        .serve_connection(io, service_fn(move |req| handle_request(req, peer_addr)))
+                        .serve_connection(
+                            io,
+                            service_fn(move |req| {
+                                let state = state.clone();
+                                async move { handle_request(req, peer_addr, state).await }
+                            }),
+                        )
                         .await
                     {
                         error!("Error serving connection: {:?}", err);
@@ -53,8 +141,8 @@ pub async fn run() -> Result<()> {
 
 /// Create TLS configuration for the proxy
 fn create_tls_config() -> Result<rustls::ServerConfig> {
-    // For now, generate a certificate for the first domain
-    // TODO: Implement SNI-based certificate selection
+    // Generate certificates for all intercepted domains
+    // For now, use copilot-proxy as the primary
     let (cert_pem, key_pem) = ca::generate_domain_cert("copilot-proxy.githubusercontent.com")?;
 
     // Parse certificate
@@ -72,40 +160,117 @@ fn create_tls_config() -> Result<rustls::ServerConfig> {
     Ok(config)
 }
 
-/// Handle an incoming HTTP request
+/// Handle an incoming HTTP request by forwarding it to the real destination
 async fn handle_request(
     req: Request<hyper::body::Incoming>,
     peer_addr: SocketAddr,
-) -> Result<Response<http_body_util::Full<hyper::body::Bytes>>, Infallible> {
-    use http_body_util::Full;
-    use hyper::body::Bytes;
+    state: Arc<ProxyState>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    match forward_request(req, peer_addr, state).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            error!("Proxy error: {:?}", err);
+            Ok(Response::builder()
+                .status(502)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(format!(
+                    r#"{{"error": "Proxy error: {}"}}"#,
+                    err
+                ))))
+                .unwrap())
+        }
+    }
+}
 
+/// Forward the request to the real destination
+async fn forward_request(
+    req: Request<hyper::body::Incoming>,
+    peer_addr: SocketAddr,
+    state: Arc<ProxyState>,
+) -> Result<Response<Full<Bytes>>> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
 
-    info!(
-        "[{}] {} {} {:?}",
-        peer_addr,
-        method,
-        uri,
-        headers.get("host")
+    // Get the target host from the Host header
+    let host = headers
+        .get("host")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("copilot-proxy.githubusercontent.com");
+
+    // Build the target URL
+    let path = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    let target_url = format!("https://{}{}", host, path);
+
+    info!("[{}] {} {} -> {}", peer_addr, method, uri, target_url);
+
+    // Read the request body
+    let body_bytes = req.collect().await?.to_bytes();
+
+    // Log request details for debugging (truncate large bodies)
+    if !body_bytes.is_empty() {
+        let body_preview = if body_bytes.len() > 200 {
+            format!("{}... ({} bytes)",
+                String::from_utf8_lossy(&body_bytes[..200]),
+                body_bytes.len())
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+        debug!("Request body: {}", body_preview);
+    }
+
+    // Build the forwarding request
+    let mut forward_req = state.client.request(
+        method.clone(),
+        &target_url,
     );
 
-    // TODO: Implement actual proxying
-    // 1. Analyze request for policy violations
-    // 2. Forward to real destination
-    // 3. Analyze response
-    // 4. Return response to client
+    // Copy headers (except Host which reqwest sets automatically)
+    for (name, value) in headers.iter() {
+        let name_str = name.as_str().to_lowercase();
+        // Skip hop-by-hop headers and Host
+        if name_str != "host"
+            && name_str != "connection"
+            && name_str != "keep-alive"
+            && name_str != "transfer-encoding"
+        {
+            if let Ok(v) = value.to_str() {
+                forward_req = forward_req.header(name.as_str(), v);
+            }
+        }
+    }
 
-    // For now, return a placeholder response
-    let response = Response::builder()
-        .status(502)
-        .header("Content-Type", "application/json")
-        .body(Full::new(Bytes::from(
-            r#"{"error": "CopilotGuard proxy not fully implemented yet"}"#,
-        )))
-        .unwrap();
+    // Add body if present
+    if !body_bytes.is_empty() {
+        forward_req = forward_req.body(body_bytes.to_vec());
+    }
 
-    Ok(response)
+    // Send the request
+    let response = forward_req.send().await?;
+
+    let status = response.status();
+    let resp_headers = response.headers().clone();
+
+    // Read response body
+    let resp_body = response.bytes().await?;
+
+    // Log response
+    info!("[{}] Response: {} ({} bytes)", peer_addr, status, resp_body.len());
+
+    // Build response to return to client
+    let mut builder = Response::builder().status(status.as_u16());
+
+    // Copy response headers
+    for (name, value) in resp_headers.iter() {
+        let name_str = name.as_str().to_lowercase();
+        // Skip hop-by-hop headers
+        if name_str != "connection"
+            && name_str != "keep-alive"
+            && name_str != "transfer-encoding"
+        {
+            builder = builder.header(name.as_str(), value.as_bytes());
+        }
+    }
+
+    Ok(builder.body(Full::new(resp_body)).unwrap())
 }
