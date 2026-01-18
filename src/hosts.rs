@@ -27,8 +27,10 @@ const HOSTS_MARKER_END: &str = "# END CopilotGuard";
 const INTERCEPT_DOMAINS: &[&str] = &[
     "copilot-proxy.githubusercontent.com",
     "api.githubcopilot.com",
+    "api.individual.githubcopilot.com",
+    "api.business.githubcopilot.com",
+    "api.enterprise.githubcopilot.com",
     // Note: We don't intercept api.github.com as it would break git operations
-    // Copilot uses the above domains for completions
 ];
 
 /// Install hosts file entries for traffic interception

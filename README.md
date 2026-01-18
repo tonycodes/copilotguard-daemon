@@ -61,6 +61,9 @@ sudo copilotguard uninstall
 1. **Hosts File Modification**: Redirects AI assistant domains to localhost:
    - `copilot-proxy.githubusercontent.com`
    - `api.githubcopilot.com`
+   - `api.individual.githubcopilot.com`
+   - `api.business.githubcopilot.com`
+   - `api.enterprise.githubcopilot.com`
 
 2. **TLS Interception**: Generates certificates signed by a local CA to decrypt HTTPS traffic
 
@@ -89,13 +92,16 @@ api_url = "https://api.guard.tony.codes"
 # Your organization's API key (optional if using OAuth)
 api_key = "cg_your_key_here"
 
-# Local proxy port
-proxy_port = 8443
+# Local proxy port (must be 443 for hosts file interception)
+proxy_port = 443
 
 # Domains to intercept
 intercept_domains = [
     "copilot-proxy.githubusercontent.com",
     "api.githubcopilot.com",
+    "api.individual.githubcopilot.com",
+    "api.business.githubcopilot.com",
+    "api.enterprise.githubcopilot.com",
 ]
 
 # Enable verbose logging
@@ -128,6 +134,27 @@ cargo build --release
 # Binary will be at target/release/copilotguard
 ```
 
+## GitHub Copilot CLI Support
+
+The GitHub Copilot CLI (`@github/copilot`) bundles its own Node.js runtime and requires special handling for CA certificate trust.
+
+### Running Copilot CLI with CopilotGuard
+
+```bash
+# Required: Set NODE_EXTRA_CA_CERTS to trust the CopilotGuard CA
+NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot
+```
+
+### Recommended: Create an alias
+
+Add to your `~/.zshrc` or `~/.bashrc`:
+
+```bash
+alias copilot='NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot'
+```
+
+This is necessary because the Copilot CLI bundles Node.js v24 which doesn't automatically trust macOS Keychain certificates for SSL connections.
+
 ## Troubleshooting
 
 ### Copilot not working after installation
@@ -136,6 +163,12 @@ cargo build --release
 2. Verify hosts file: `cat /etc/hosts | grep copilot`
 3. Check CA is trusted: Look for "CopilotGuard Local CA" in Keychain (macOS) or certificates (Linux)
 4. View logs: `tail -f /var/log/copilotguard.log` (macOS) or `journalctl -u copilotguard -f` (Linux)
+
+### GitHub Copilot CLI showing "Failed to list models"
+
+This usually means the CA certificate isn't being trusted. Make sure:
+1. The CA has SSL trust policy: `security dump-trust-settings -d | grep -A15 "CopilotGuard"`
+2. You're running with NODE_EXTRA_CA_CERTS: `NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot`
 
 ### Resetting CA Certificate
 
@@ -154,6 +187,14 @@ rm -rf ~/.config/copilotguard
 # Then reinstall
 sudo copilotguard install
 ```
+
+## Development Documentation
+
+See [LEARNINGS.md](LEARNINGS.md) for detailed technical documentation including:
+- TLS interception architecture
+- Certificate chain requirements
+- macOS Keychain trust policies
+- Debugging TLS issues
 
 ## License
 

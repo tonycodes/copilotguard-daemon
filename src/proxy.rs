@@ -7,15 +7,17 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::Client;
+use rustls::server::{ClientHello, ResolvesServerCert};
+use rustls::sign::CertifiedKey;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::ca;
 use crate::config;
@@ -51,6 +53,33 @@ impl BypassResolver {
             ],
         );
 
+        // Individual Copilot domain
+        overrides.insert(
+            "api.individual.githubcopilot.com".to_string(),
+            vec![
+                IpAddr::V4(Ipv4Addr::new(140, 82, 112, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 113, 21)),
+            ],
+        );
+
+        // Business Copilot domain
+        overrides.insert(
+            "api.business.githubcopilot.com".to_string(),
+            vec![
+                IpAddr::V4(Ipv4Addr::new(140, 82, 112, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 113, 21)),
+            ],
+        );
+
+        // Enterprise Copilot domain
+        overrides.insert(
+            "api.enterprise.githubcopilot.com".to_string(),
+            vec![
+                IpAddr::V4(Ipv4Addr::new(140, 82, 112, 21)),
+                IpAddr::V4(Ipv4Addr::new(140, 82, 113, 21)),
+            ],
+        );
+
         Self { overrides }
     }
 }
@@ -80,6 +109,104 @@ impl Resolve for BypassResolver {
     }
 }
 
+/// SNI-based certificate resolver that generates certificates on-demand
+#[derive(Debug)]
+struct SniCertResolver {
+    /// Cache of generated certificates by domain
+    cache: RwLock<HashMap<String, Arc<CertifiedKey>>>,
+    /// Domains we're allowed to intercept
+    allowed_domains: Vec<String>,
+}
+
+impl SniCertResolver {
+    fn new(allowed_domains: Vec<String>) -> Self {
+        Self {
+            cache: RwLock::new(HashMap::new()),
+            allowed_domains,
+        }
+    }
+
+    fn get_or_create_cert(&self, domain: &str) -> Option<Arc<CertifiedKey>> {
+        // Check cache first
+        {
+            let cache = self.cache.read().ok()?;
+            if let Some(key) = cache.get(domain) {
+                return Some(key.clone());
+            }
+        }
+
+        // Generate new certificate
+        info!("Generating certificate for domain: {}", domain);
+        let (cert_pem, key_pem) = match ca::generate_domain_cert(domain) {
+            Ok((c, k)) => (c, k),
+            Err(e) => {
+                error!("Failed to generate certificate for {}: {}", domain, e);
+                return None;
+            }
+        };
+
+        // Parse certificate chain
+        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut cert_pem.as_bytes())
+                .filter_map(|r| r.ok())
+                .collect();
+
+        if certs.is_empty() {
+            error!("No certificates parsed for {}", domain);
+            return None;
+        }
+
+        // Parse private key
+        let key = match rustls_pemfile::private_key(&mut key_pem.as_bytes()) {
+            Ok(Some(k)) => k,
+            Ok(None) => {
+                error!("No private key found for {}", domain);
+                return None;
+            }
+            Err(e) => {
+                error!("Failed to parse private key for {}: {}", domain, e);
+                return None;
+            }
+        };
+
+        // Create signing key
+        let signing_key = match rustls::crypto::aws_lc_rs::sign::any_supported_type(&key) {
+            Ok(k) => k,
+            Err(e) => {
+                error!("Failed to create signing key for {}: {:?}", domain, e);
+                return None;
+            }
+        };
+
+        let certified_key = Arc::new(CertifiedKey::new(certs, signing_key));
+
+        // Store in cache
+        {
+            if let Ok(mut cache) = self.cache.write() {
+                cache.insert(domain.to_string(), certified_key.clone());
+            }
+        }
+
+        Some(certified_key)
+    }
+}
+
+impl ResolvesServerCert for SniCertResolver {
+    fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        let sni = client_hello.server_name()?;
+        info!("TLS connection for SNI: {}", sni);
+
+        // Check if this domain is in our allowed list
+        let domain = sni.to_string();
+        if !self.allowed_domains.iter().any(|d| d == &domain) {
+            warn!("Domain {} not in allowed list, rejecting", domain);
+            return None;
+        }
+
+        self.get_or_create_cert(&domain)
+    }
+}
+
 /// Shared state for the proxy
 struct ProxyState {
     client: Client,
@@ -101,8 +228,8 @@ pub async fn run() -> Result<()> {
 
     let state = Arc::new(ProxyState { client });
 
-    // Load TLS config
-    let tls_config = create_tls_config()?;
+    // Load TLS config with SNI-based certificate selection
+    let tls_config = create_tls_config(config.intercept_domains.clone())?;
     let tls_acceptor = TlsAcceptor::from(Arc::new(tls_config));
 
     let listener = TcpListener::bind(addr).await?;
@@ -139,23 +266,13 @@ pub async fn run() -> Result<()> {
     }
 }
 
-/// Create TLS configuration for the proxy
-fn create_tls_config() -> Result<rustls::ServerConfig> {
-    // Generate certificates for all intercepted domains
-    // For now, use copilot-proxy as the primary
-    let (cert_pem, key_pem) = ca::generate_domain_cert("copilot-proxy.githubusercontent.com")?;
-
-    // Parse certificate
-    let cert = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Parse private key
-    let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?
-        .ok_or_else(|| anyhow::anyhow!("No private key found"))?;
+/// Create TLS configuration for the proxy with SNI-based certificate selection
+fn create_tls_config(allowed_domains: Vec<String>) -> Result<rustls::ServerConfig> {
+    let cert_resolver = Arc::new(SniCertResolver::new(allowed_domains));
 
     let config = rustls::ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(cert, key)?;
+        .with_cert_resolver(cert_resolver);
 
     Ok(config)
 }

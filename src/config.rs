@@ -32,14 +32,15 @@ impl Default for Config {
         Self {
             api_url: "https://api.guard.tony.codes".to_string(),
             api_key: None,
-            proxy_port: 8443,
+            // Use port 443 so hosts file redirect works
+            // (Copilot CLI connects to domains on standard HTTPS port)
+            proxy_port: 443,
             intercept_domains: vec![
-                "api.github.com".to_string(),
                 "copilot-proxy.githubusercontent.com".to_string(),
                 "api.githubcopilot.com".to_string(),
-                // Future: Add other AI assistants
-                // "api.openai.com".to_string(),
-                // "api.anthropic.com".to_string(),
+                "api.individual.githubcopilot.com".to_string(),
+                "api.business.githubcopilot.com".to_string(),
+                "api.enterprise.githubcopilot.com".to_string(),
             ],
             verbose: false,
             ca_cert_path: None,

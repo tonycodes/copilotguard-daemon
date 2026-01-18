@@ -213,8 +213,10 @@ fn trust_ca_windows(cert_path: &PathBuf) -> Result<()> {
 }
 
 /// Generate a certificate for a specific domain, signed by the CA
+/// Returns (cert_chain_pem, key_pem) where cert_chain includes both domain cert and CA cert
 pub fn generate_domain_cert(domain: &str) -> Result<(String, String)> {
-    // Load CA key
+    // Load CA certificate and key
+    let ca_cert_pem = fs::read_to_string(ca_cert_path()?)?;
     let ca_key_pem = fs::read_to_string(ca_key_path()?)?;
     let ca_key_pair = KeyPair::from_pem(&ca_key_pem)?;
 
@@ -252,5 +254,8 @@ pub fn generate_domain_cert(domain: &str) -> Result<(String, String)> {
 
     let domain_cert = params.signed_by(&domain_key_pair, &ca_cert, &ca_key_pair)?;
 
-    Ok((domain_cert.pem(), domain_key_pair.serialize_pem()))
+    // Return full certificate chain: domain cert + CA cert
+    let cert_chain = format!("{}{}", domain_cert.pem(), ca_cert_pem);
+
+    Ok((cert_chain, domain_key_pair.serialize_pem()))
 }
