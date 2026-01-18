@@ -138,19 +138,31 @@ cargo build --release
 
 The GitHub Copilot CLI (`@github/copilot`) bundles its own Node.js runtime and requires special handling for CA certificate trust.
 
-### Running Copilot CLI with CopilotGuard
+### Option 1: Use the wrapper script (Recommended)
+
+The installation includes a wrapper script that automatically handles CA trust:
 
 ```bash
-# Required: Set NODE_EXTRA_CA_CERTS to trust the CopilotGuard CA
-NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot
+# Install the wrapper (done automatically by copilotguard install)
+sudo cp /path/to/copilotguard-daemon/scripts/copilot-wrapper.sh /usr/local/bin/copilot-guarded
+sudo chmod +x /usr/local/bin/copilot-guarded
+
+# Use the wrapper
+copilot-guarded explain "what does git rebase do?"
 ```
 
-### Recommended: Create an alias
+### Option 2: Create an alias
 
 Add to your `~/.zshrc` or `~/.bashrc`:
 
 ```bash
 alias copilot='NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot'
+```
+
+### Option 3: Manual invocation
+
+```bash
+NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot
 ```
 
 This is necessary because the Copilot CLI bundles Node.js v24 which doesn't automatically trust macOS Keychain certificates for SSL connections.
