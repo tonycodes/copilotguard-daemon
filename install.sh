@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # CopilotGuard Installer
@@ -15,10 +15,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-info() { echo -e "${BLUE}==>${NC} $1"; }
-success() { echo -e "${GREEN}==>${NC} $1"; }
-warn() { echo -e "${YELLOW}==>${NC} $1"; }
-error() { echo -e "${RED}==>${NC} $1"; exit 1; }
+info() { printf "${BLUE}==>${NC} %s\n" "$1"; }
+success() { printf "${GREEN}==>${NC} %s\n" "$1"; }
+warn() { printf "${YELLOW}==>${NC} %s\n" "$1"; }
+error() { printf "${RED}==>${NC} %s\n" "$1"; exit 1; }
 
 # Detect OS and architecture
 detect_platform() {
@@ -96,29 +96,29 @@ verify_install() {
 
 # Print next steps
 print_next_steps() {
-    echo ""
-    echo -e "${GREEN}Installation complete!${NC}"
-    echo ""
-    echo "Next steps:"
-    echo ""
-    echo "  1. Complete setup (generates CA, configures hosts file, starts daemon):"
-    echo -e "     ${YELLOW}sudo copilotguard install${NC}"
-    echo ""
-    echo "  2. For GitHub Copilot CLI support, add this alias to your shell profile:"
-    echo -e "     ${YELLOW}echo 'alias copilot=\"NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot\"' >> ~/.zshrc${NC}"
-    echo ""
-    echo "  3. Reload your shell and test:"
-    echo -e "     ${YELLOW}source ~/.zshrc${NC}"
-    echo -e "     ${YELLOW}copilot -p \"hello\"${NC}"
-    echo ""
-    echo "For more information: https://github.com/${GITHUB_REPO}"
+    printf "\n"
+    printf "${GREEN}Installation complete!${NC}\n"
+    printf "\n"
+    printf "Next steps:\n"
+    printf "\n"
+    printf "  1. Complete setup (generates CA, configures hosts file, starts daemon):\n"
+    printf "     ${YELLOW}sudo copilotguard install${NC}\n"
+    printf "\n"
+    printf "  2. For GitHub Copilot CLI support, add this alias to your shell profile:\n"
+    printf "     ${YELLOW}echo 'alias copilot=\"NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot\"' >> ~/.zshrc${NC}\n"
+    printf "\n"
+    printf "  3. Reload your shell and test:\n"
+    printf "     ${YELLOW}source ~/.zshrc${NC}\n"
+    printf "     ${YELLOW}copilot -p \"hello\"${NC}\n"
+    printf "\n"
+    printf "For more information: https://github.com/${GITHUB_REPO}\n"
 }
 
 # Main
 main() {
-    echo ""
-    echo -e "${BLUE}CopilotGuard Installer${NC}"
-    echo ""
+    printf "\n"
+    printf "${BLUE}CopilotGuard Installer${NC}\n"
+    printf "\n"
 
     detect_platform
     get_latest_version
