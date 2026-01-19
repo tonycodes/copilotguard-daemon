@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,17 +22,17 @@ jobs:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-latest
-            name: copilotguard-macos-x86_64
+            os: macos-13
+            name: copilotguard-darwin-amd64
           - target: aarch64-apple-darwin
-            os: macos-latest
-            name: copilotguard-macos-aarch64
+            os: macos-14
+            name: copilotguard-darwin-arm64
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            name: copilotguard-linux-x86_64
+            name: copilotguard-linux-amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            name: copilotguard-linux-aarch64
+            name: copilotguard-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -55,12 +60,15 @@ jobs:
           cd target/${{ matrix.target }}/release
           tar -czvf ../../../${{ matrix.name }}.tar.gz copilotguard
           cd ../../..
+          shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: ${{ matrix.name }}.tar.gz
+          path: |
+            ${{ matrix.name }}.tar.gz
+            ${{ matrix.name }}.tar.gz.sha256
 
   release:
     name: Create Release
@@ -72,25 +80,116 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "tag=v${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Create checksums
+      - name: Prepare release assets
         run: |
-          cd artifacts
-          for dir in */; do
-            mv "$dir"/*.tar.gz .
-          done
-          sha256sum *.tar.gz > SHA256SUMS.txt
+          mkdir -p release
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.sha256" \) -exec mv {} release/ \;
+          cd release
+          cat *.sha256 > SHA256SUMS.txt
+          ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/*.tar.gz
-            artifacts/SHA256SUMS.txt
-          generate_release_notes: true
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: CopilotGuard Daemon ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
+          files: release/*
+          body: |
+            ## Installation
+
+            ### Homebrew (Recommended)
+            ```bash
+            brew install tonycodes/tap/copilotguard
+            ```
+
+            ### macOS (Apple Silicon)
+            ```bash
+            curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-darwin-arm64.tar.gz | tar -xz
+            sudo mv copilotguard /usr/local/bin/
+            sudo copilotguard install
+            ```
+
+            ### macOS (Intel)
+            ```bash
+            curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-darwin-amd64.tar.gz | tar -xz
+            sudo mv copilotguard /usr/local/bin/
+            sudo copilotguard install
+            ```
+
+            ### Linux (x86_64)
+            ```bash
+            curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-linux-amd64.tar.gz | tar -xz
+            sudo mv copilotguard /usr/local/bin/
+            sudo copilotguard install
+            ```
+
+            ### Linux (ARM64)
+            ```bash
+            curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-linux-arm64.tar.gz | tar -xz
+            sudo mv copilotguard /usr/local/bin/
+            sudo copilotguard install
+            ```
+
+            ## What's Changed
+            See the full changelog below.
+
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download artifacts for checksums
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get checksums
+        id: checksums
+        run: |
+          echo "darwin_arm64=$(cat artifacts/copilotguard-darwin-arm64/copilotguard-darwin-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "darwin_amd64=$(cat artifacts/copilotguard-darwin-amd64/copilotguard-darwin-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "linux_amd64=$(cat artifacts/copilotguard-linux-amd64/copilotguard-linux-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+          echo "linux_arm64=$(cat artifacts/copilotguard-linux-arm64/copilotguard-linux-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
+
+      - name: Trigger Homebrew tap update
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: tonycodes/homebrew-tap
+          event-type: update-formula
+          client-payload: |
+            {
+              "formula": "copilotguard",
+              "version": "${{ steps.version.outputs.version }}",
+              "darwin_arm64_sha256": "${{ steps.checksums.outputs.darwin_arm64 }}",
+              "darwin_amd64_sha256": "${{ steps.checksums.outputs.darwin_amd64 }}",
+              "linux_amd64_sha256": "${{ steps.checksums.outputs.linux_amd64 }}",
+              "linux_arm64_sha256": "${{ steps.checksums.outputs.linux_arm64 }}"
+            }
