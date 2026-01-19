@@ -38,7 +38,7 @@ detect_platform() {
     esac
 
     # Check for unsupported combinations
-    if [[ "$OS" == "linux" && "$ARCH" == "arm64" ]]; then
+    if [ "$OS" = "linux" ] && [ "$ARCH" = "arm64" ]; then
         error "Linux ARM64 is not yet supported. Please use x86_64."
     fi
 
@@ -48,16 +48,16 @@ detect_platform() {
 
 # Get the latest version from GitHub
 get_latest_version() {
-    if [[ "$VERSION" == "latest" ]]; then
+    if [ "$VERSION" = "latest" ]; then
         VERSION=$(curl -sSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
-        if [[ -z "$VERSION" ]]; then
+        if [ -z "$VERSION" ]; then
             error "Failed to fetch latest version"
         fi
     fi
     info "Installing CopilotGuard $VERSION"
 }
 
-# Download and install
+# Download and install binary
 install_binary() {
     DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/copilotguard-${PLATFORM}.tar.gz"
 
@@ -73,7 +73,7 @@ install_binary() {
     info "Extracting..."
     tar -xzf "$TMP_DIR/copilotguard.tar.gz" -C "$TMP_DIR"
 
-    if [[ ! -f "$TMP_DIR/copilotguard" ]]; then
+    if [ ! -f "$TMP_DIR/copilotguard" ]; then
         error "Binary not found in archive"
     fi
 
@@ -84,47 +84,112 @@ install_binary() {
     success "Binary installed to $INSTALL_DIR/copilotguard"
 }
 
-# Verify installation
-verify_install() {
-    if command -v copilotguard &> /dev/null; then
-        INSTALLED_VERSION=$(copilotguard --version 2>/dev/null || echo "unknown")
-        success "CopilotGuard installed successfully: $INSTALLED_VERSION"
+# Run copilotguard install to set up CA, hosts, and daemon
+setup_daemon() {
+    info "Setting up CopilotGuard (CA certificate, hosts file, daemon)..."
+
+    if ! sudo "$INSTALL_DIR/copilotguard" install; then
+        error "Failed to complete CopilotGuard setup"
+    fi
+
+    success "CopilotGuard daemon is running"
+}
+
+# Configure shell alias for Copilot CLI
+setup_shell_alias() {
+    ALIAS_LINE='alias copilot="NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot"'
+
+    # Detect shell config file
+    if [ -n "$ZSH_VERSION" ] || [ -f "$HOME/.zshrc" ]; then
+        SHELL_RC="$HOME/.zshrc"
+    elif [ -n "$BASH_VERSION" ] || [ -f "$HOME/.bashrc" ]; then
+        SHELL_RC="$HOME/.bashrc"
     else
-        warn "Binary installed but not in PATH. Add $INSTALL_DIR to your PATH."
+        SHELL_RC="$HOME/.profile"
+    fi
+
+    # Check if alias already exists
+    if grep -q "NODE_EXTRA_CA_CERTS=/etc/copilotguard" "$SHELL_RC" 2>/dev/null; then
+        info "Copilot CLI alias already configured in $SHELL_RC"
+    else
+        info "Adding Copilot CLI alias to $SHELL_RC"
+        printf "\n# CopilotGuard: Enable CA trust for GitHub Copilot CLI\n%s\n" "$ALIAS_LINE" >> "$SHELL_RC"
+        success "Alias added to $SHELL_RC"
     fi
 }
 
-# Print next steps
-print_next_steps() {
+# Verify everything is working
+verify_setup() {
     printf "\n"
-    printf "${GREEN}Installation complete!${NC}\n"
+    info "Verifying installation..."
+
+    # Check binary
+    if command -v copilotguard > /dev/null 2>&1; then
+        INSTALLED_VERSION=$(copilotguard --version 2>/dev/null || echo "unknown")
+        success "Binary: $INSTALLED_VERSION"
+    else
+        warn "Binary not in PATH"
+    fi
+
+    # Check daemon
+    if pgrep -f "copilotguard" > /dev/null 2>&1; then
+        success "Daemon: running"
+    else
+        warn "Daemon: not running"
+    fi
+
+    # Check CA
+    if [ -f "/etc/copilotguard/ca.crt" ]; then
+        success "CA certificate: installed"
+    else
+        warn "CA certificate: not found"
+    fi
+
+    # Check hosts file
+    if grep -q "copilot" /etc/hosts 2>/dev/null; then
+        success "Hosts file: configured"
+    else
+        warn "Hosts file: not configured"
+    fi
+}
+
+# Print completion message
+print_complete() {
     printf "\n"
-    printf "Next steps:\n"
+    printf "${GREEN}======================================${NC}\n"
+    printf "${GREEN}  CopilotGuard installation complete! ${NC}\n"
+    printf "${GREEN}======================================${NC}\n"
     printf "\n"
-    printf "  1. Complete setup (generates CA, configures hosts file, starts daemon):\n"
-    printf "     ${YELLOW}sudo copilotguard install${NC}\n"
+    printf "To activate the Copilot CLI alias, run:\n"
+    printf "  ${YELLOW}source ~/.zshrc${NC}  (or restart your terminal)\n"
     printf "\n"
-    printf "  2. For GitHub Copilot CLI support, add this alias to your shell profile:\n"
-    printf "     ${YELLOW}echo 'alias copilot=\"NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot\"' >> ~/.zshrc${NC}\n"
+    printf "Then test with:\n"
+    printf "  ${YELLOW}copilot -p \"hello\"${NC}\n"
     printf "\n"
-    printf "  3. Reload your shell and test:\n"
-    printf "     ${YELLOW}source ~/.zshrc${NC}\n"
-    printf "     ${YELLOW}copilot -p \"hello\"${NC}\n"
+    printf "Useful commands:\n"
+    printf "  ${BLUE}copilotguard status${NC}   - Check daemon status\n"
+    printf "  ${BLUE}sudo copilotguard stop${NC} - Stop the daemon\n"
+    printf "  ${BLUE}sudo copilotguard uninstall${NC} - Remove completely\n"
     printf "\n"
     printf "For more information: https://github.com/${GITHUB_REPO}\n"
+    printf "\n"
 }
 
 # Main
 main() {
     printf "\n"
-    printf "${BLUE}CopilotGuard Installer${NC}\n"
+    printf "${BLUE}================================${NC}\n"
+    printf "${BLUE}  CopilotGuard Installer${NC}\n"
+    printf "${BLUE}================================${NC}\n"
     printf "\n"
 
     detect_platform
     get_latest_version
     install_binary
-    verify_install
-    print_next_steps
+    setup_daemon
+    setup_shell_alias
+    verify_setup
+    print_complete
 }
 
 main "$@"
