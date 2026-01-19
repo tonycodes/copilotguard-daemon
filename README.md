@@ -15,20 +15,20 @@ A lightweight, tool-agnostic daemon that intercepts and analyzes AI coding assis
 ### Quick Install (Recommended)
 
 ```bash
-# Download the latest release
-curl -sSL https://get.copilotguard.com | sh
+# Download and install (includes CA setup and daemon)
+curl -sSL https://raw.githubusercontent.com/tonycodes/copilotguard-daemon/main/install.sh | sh
 
 # Or with Homebrew (macOS)
-brew install copilotguard/tap/copilotguard
+brew install tonycodes/tap/copilotguard-daemon
 ```
 
 ### Manual Installation
 
-1. Download the binary for your platform from [Releases](https://github.com/tonysnark/copilotguard-daemon/releases)
+1. Download the binary for your platform from [Releases](https://github.com/tonycodes/copilotguard-daemon/releases)
 
 2. Run the installer (requires sudo):
    ```bash
-   sudo copilotguard install
+   sudo copilotguard-daemon install
    ```
 
 This will:
@@ -41,19 +41,19 @@ This will:
 
 ```bash
 # Check status
-copilotguard status
+copilotguard-daemon status
 
 # View configuration
-copilotguard config
+copilotguard-daemon config
 
 # Stop the daemon
-sudo copilotguard stop
+sudo copilotguard-daemon stop
 
 # Start the daemon
-sudo copilotguard start
+sudo copilotguard-daemon start
 
 # Uninstall completely
-sudo copilotguard uninstall
+sudo copilotguard-daemon uninstall
 ```
 
 ## How It Works
@@ -125,13 +125,13 @@ verbose = false
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone the repository
-git clone https://github.com/tonysnark/copilotguard-daemon.git
+git clone https://github.com/tonycodes/copilotguard-daemon.git
 cd copilotguard-daemon
 
 # Build release binary
 cargo build --release
 
-# Binary will be at target/release/copilotguard
+# Binary will be at target/release/copilotguard-daemon
 ```
 
 ## GitHub Copilot CLI Support
@@ -171,10 +171,10 @@ This is necessary because the Copilot CLI bundles Node.js v24 which doesn't auto
 
 ### Copilot not working after installation
 
-1. Check the daemon is running: `copilotguard status`
+1. Check the daemon is running: `copilotguard-daemon status`
 2. Verify hosts file: `cat /etc/hosts | grep copilot`
 3. Check CA is trusted: Look for "CopilotGuard Local CA" in Keychain (macOS) or certificates (Linux)
-4. View logs: `tail -f /var/log/copilotguard.log` (macOS) or `journalctl -u copilotguard -f` (Linux)
+4. View logs: `tail -f /var/log/copilotguard.log` (macOS) or `journalctl -u copilotguard-daemon -f` (Linux)
 
 ### GitHub Copilot CLI showing "Failed to list models"
 
@@ -187,17 +187,17 @@ This usually means the CA certificate isn't being trusted. Make sure:
 If you need to regenerate the CA certificate:
 
 ```bash
-copilotguard generate-ca --force
-sudo copilotguard trust-ca
+copilotguard-daemon generate-ca --force
+sudo copilotguard-daemon trust-ca
 ```
 
 ### Complete Reset
 
 ```bash
-sudo copilotguard uninstall
+sudo copilotguard-daemon uninstall
 rm -rf ~/.config/copilotguard
 # Then reinstall
-sudo copilotguard install
+sudo copilotguard-daemon install
 ```
 
 ## Development Documentation
@@ -214,5 +214,5 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Related
 
-- [CopilotGuard](https://github.com/tonysnark/copilotguard) - Main CopilotGuard platform
-- [CopilotGuard CLI](https://github.com/tonysnark/copilotguard/tree/main/packages/cli) - Legacy Node.js CLI
+- [CopilotGuard](https://github.com/tonycodes/copilotguard) - Main CopilotGuard platform
+- [CopilotGuard CLI](https://github.com/tonycodes/copilotguard/tree/main/packages/cli) - Node.js CLI tool

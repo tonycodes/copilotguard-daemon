@@ -59,7 +59,7 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../${{ matrix.name }}.tar.gz copilotguard
+          tar -czvf ../../../${{ matrix.name }}.tar.gz copilotguard-daemon
           cd ../../..
           shasum -a 256 ${{ matrix.name }}.tar.gz > ${{ matrix.name }}.tar.gz.sha256
 
@@ -124,22 +124,22 @@ jobs:
             ### macOS (Apple Silicon)
             ```bash
             curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-darwin-arm64.tar.gz | tar -xz
-            sudo mv copilotguard /usr/local/bin/
-            sudo copilotguard install
+            sudo mv copilotguard-daemon /usr/local/bin/
+            sudo copilotguard-daemon install
             ```
 
             ### macOS (Intel)
             ```bash
             curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-darwin-amd64.tar.gz | tar -xz
-            sudo mv copilotguard /usr/local/bin/
-            sudo copilotguard install
+            sudo mv copilotguard-daemon /usr/local/bin/
+            sudo copilotguard-daemon install
             ```
 
             ### Linux (x86_64)
             ```bash
             curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-linux-amd64.tar.gz | tar -xz
-            sudo mv copilotguard /usr/local/bin/
-            sudo copilotguard install
+            sudo mv copilotguard-daemon /usr/local/bin/
+            sudo copilotguard-daemon install
             ```
 
             ## What's Changed
@@ -179,7 +179,7 @@ jobs:
           event-type: update-formula
           client-payload: |
             {
-              "formula": "copilotguard",
+              "formula": "copilotguard-daemon",
               "version": "${{ steps.version.outputs.version }}",
               "darwin_arm64_sha256": "${{ steps.checksums.outputs.darwin_arm64 }}",
               "darwin_amd64_sha256": "${{ steps.checksums.outputs.darwin_amd64 }}",
