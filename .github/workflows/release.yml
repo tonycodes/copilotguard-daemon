@@ -30,9 +30,10 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: copilotguard-linux-amd64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: copilotguard-linux-arm64
+          # Linux ARM64 disabled for now - needs cross-compilation setup for OpenSSL
+          # - target: aarch64-unknown-linux-gnu
+          #   os: ubuntu-latest
+          #   name: copilotguard-linux-arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -141,13 +142,6 @@ jobs:
             sudo copilotguard install
             ```
 
-            ### Linux (ARM64)
-            ```bash
-            curl -sSL https://github.com/tonycodes/copilotguard-daemon/releases/download/${{ steps.version.outputs.tag }}/copilotguard-linux-arm64.tar.gz | tar -xz
-            sudo mv copilotguard /usr/local/bin/
-            sudo copilotguard install
-            ```
-
             ## What's Changed
             See the full changelog below.
 
@@ -176,7 +170,6 @@ jobs:
           echo "darwin_arm64=$(cat artifacts/copilotguard-darwin-arm64/copilotguard-darwin-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
           echo "darwin_amd64=$(cat artifacts/copilotguard-darwin-amd64/copilotguard-darwin-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
           echo "linux_amd64=$(cat artifacts/copilotguard-linux-amd64/copilotguard-linux-amd64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
-          echo "linux_arm64=$(cat artifacts/copilotguard-linux-arm64/copilotguard-linux-arm64.tar.gz.sha256 | awk '{print $1}')" >> $GITHUB_OUTPUT
 
       - name: Trigger Homebrew tap update
         uses: peter-evans/repository-dispatch@v3
@@ -190,6 +183,5 @@ jobs:
               "version": "${{ steps.version.outputs.version }}",
               "darwin_arm64_sha256": "${{ steps.checksums.outputs.darwin_arm64 }}",
               "darwin_amd64_sha256": "${{ steps.checksums.outputs.darwin_amd64 }}",
-              "linux_amd64_sha256": "${{ steps.checksums.outputs.linux_amd64 }}",
-              "linux_arm64_sha256": "${{ steps.checksums.outputs.linux_arm64 }}"
+              "linux_amd64_sha256": "${{ steps.checksums.outputs.linux_amd64 }}"
             }
