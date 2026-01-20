@@ -63,6 +63,9 @@ copilotguard-daemon logout
 # View configuration
 copilotguard-daemon config
 
+# Upgrade to latest version
+sudo copilotguard-daemon upgrade
+
 # Stop the daemon
 sudo copilotguard-daemon stop
 

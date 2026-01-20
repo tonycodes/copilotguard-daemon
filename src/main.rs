@@ -76,6 +76,13 @@ enum Commands {
 
     /// Test API connection and key validity
     Health,
+
+    /// Upgrade to the latest version
+    Upgrade {
+        /// Skip confirmation prompt
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[tokio::main]
@@ -424,6 +431,174 @@ async fn main() -> Result<()> {
                 Ok(false) => println!("✗ Invalid or not configured"),
                 Err(e) => println!("✗ Error: {}", e),
             }
+        }
+
+        Commands::Upgrade { yes } => {
+            let current_version = env!("CARGO_PKG_VERSION");
+            println!("CopilotGuard Daemon Upgrade");
+            println!("===========================");
+            println!();
+            println!("Current version: v{}", current_version);
+
+            // Fetch latest release from GitHub
+            print!("Checking for updates... ");
+            std::io::Write::flush(&mut std::io::stdout())?;
+
+            let client = reqwest::Client::new();
+            let release_url = "https://api.github.com/repos/tonycodes/copilotguard-daemon/releases/latest";
+
+            let response = client
+                .get(release_url)
+                .header("User-Agent", "copilotguard-daemon")
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                println!("✗");
+                anyhow::bail!("Failed to check for updates: HTTP {}", response.status());
+            }
+
+            let release: serde_json::Value = response.json().await?;
+            let latest_tag = release["tag_name"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Invalid release response"))?;
+            let latest_version = latest_tag.trim_start_matches('v');
+
+            println!("✓");
+            println!("Latest version:  v{}", latest_version);
+            println!();
+
+            // Compare versions
+            if latest_version == current_version {
+                println!("✓ You are already running the latest version.");
+                return Ok(());
+            }
+
+            // Check if current is newer (dev build)
+            let current_parts: Vec<u32> = current_version
+                .split('.')
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let latest_parts: Vec<u32> = latest_version
+                .split('.')
+                .filter_map(|s| s.parse().ok())
+                .collect();
+
+            if current_parts > latest_parts {
+                println!("✓ You are running a development version newer than the latest release.");
+                return Ok(());
+            }
+
+            // Confirm upgrade
+            if !yes {
+                print!("Upgrade to v{}? [y/N] ", latest_version);
+                std::io::Write::flush(&mut std::io::stdout())?;
+
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("Upgrade cancelled.");
+                    return Ok(());
+                }
+            }
+
+            // Detect platform
+            let (os, arch) = match (std::env::consts::OS, std::env::consts::ARCH) {
+                ("macos", "x86_64") => ("darwin", "amd64"),
+                ("macos", "aarch64") => ("darwin", "arm64"),
+                ("linux", "x86_64") => ("linux", "amd64"),
+                (os, arch) => anyhow::bail!("Unsupported platform: {}-{}", os, arch),
+            };
+
+            let asset_name = format!("copilotguard-{}-{}.tar.gz", os, arch);
+            println!();
+            println!("Downloading {}...", asset_name);
+
+            // Find download URL
+            let assets = release["assets"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("No assets in release"))?;
+
+            let download_url = assets
+                .iter()
+                .find(|a| a["name"].as_str() == Some(&asset_name))
+                .and_then(|a| a["browser_download_url"].as_str())
+                .ok_or_else(|| anyhow::anyhow!("Asset {} not found in release", asset_name))?;
+
+            // Download to temp file
+            let response = client
+                .get(download_url)
+                .header("User-Agent", "copilotguard-daemon")
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                anyhow::bail!("Failed to download: HTTP {}", response.status());
+            }
+
+            let bytes = response.bytes().await?;
+            let tmp_dir = std::env::temp_dir().join("copilotguard-upgrade");
+            std::fs::create_dir_all(&tmp_dir)?;
+            let archive_path = tmp_dir.join(&asset_name);
+            std::fs::write(&archive_path, &bytes)?;
+
+            // Extract archive
+            println!("Extracting...");
+            let output = std::process::Command::new("tar")
+                .args(["-xzf", archive_path.to_str().unwrap()])
+                .current_dir(&tmp_dir)
+                .output()?;
+
+            if !output.status.success() {
+                anyhow::bail!("Failed to extract archive");
+            }
+
+            let new_binary = tmp_dir.join("copilotguard-daemon");
+            if !new_binary.exists() {
+                anyhow::bail!("Binary not found in archive");
+            }
+
+            // Get current binary path
+            let current_binary = std::env::current_exe()?;
+            println!("Replacing {}...", current_binary.display());
+
+            // Stop daemon before replacing
+            println!("Stopping daemon...");
+            let _ = service::stop();
+
+            // Replace binary (requires sudo for /usr/local/bin)
+            let status = std::process::Command::new("cp")
+                .args([
+                    new_binary.to_str().unwrap(),
+                    current_binary.to_str().unwrap(),
+                ])
+                .status()?;
+
+            if !status.success() {
+                // Try with sudo hint
+                println!();
+                println!("⚠ Could not replace binary. Try running with sudo:");
+                println!("  sudo copilotguard-daemon upgrade -y");
+
+                // Restart daemon with old version
+                let _ = service::start();
+                return Ok(());
+            }
+
+            // Clean up
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+
+            // Restart daemon
+            println!("Starting daemon...");
+            match service::start() {
+                Ok(()) => {}
+                Err(e) => {
+                    println!("⚠ Could not start daemon: {}", e);
+                }
+            }
+
+            println!();
+            println!("✓ Successfully upgraded to v{}", latest_version);
         }
     }
 

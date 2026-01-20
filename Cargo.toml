@@ -1,6 +1,6 @@
 [package]
 name = "copilotguard-daemon"
-version = "0.2.1"
+version = "0.4.0"
 edition = "2021"
 description = "Lightweight daemon for intercepting and analyzing AI coding assistant traffic"
 license = "MIT"
