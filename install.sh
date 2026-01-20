@@ -96,6 +96,28 @@ setup_daemon() {
     success "CopilotGuard Daemon is running"
 }
 
+# Run device auth login flow
+setup_login() {
+    printf "\n"
+    info "Connecting to CopilotGuard..."
+    printf "\n"
+
+    if ! "$INSTALL_DIR/$BINARY_NAME" login; then
+        warn "Login skipped or failed. You can run 'copilotguard-daemon login' later."
+        return
+    fi
+
+    # Restart daemon to apply the new API key
+    info "Restarting daemon to apply configuration..."
+    if [ "$(uname -s)" = "Darwin" ]; then
+        sudo launchctl bootout system/com.copilotguard.daemon 2>/dev/null || true
+        sudo launchctl bootstrap system /Library/LaunchDaemons/com.copilotguard.daemon.plist
+    else
+        sudo systemctl restart copilotguard 2>/dev/null || true
+    fi
+    success "Daemon restarted with API key"
+}
+
 # Configure shell alias for Copilot CLI
 setup_shell_alias() {
     ALIAS_LINE='alias copilot="NODE_EXTRA_CA_CERTS=/etc/copilotguard/ca.crt copilot"'
@@ -169,6 +191,8 @@ print_complete() {
     printf "\n"
     printf "Useful commands:\n"
     printf "  ${BLUE}copilotguard-daemon status${NC}   - Check daemon status\n"
+    printf "  ${BLUE}copilotguard-daemon health${NC}   - Test API connection\n"
+    printf "  ${BLUE}copilotguard-daemon login${NC}    - Login or switch accounts\n"
     printf "  ${BLUE}sudo copilotguard-daemon stop${NC} - Stop the daemon\n"
     printf "  ${BLUE}sudo copilotguard-daemon uninstall${NC} - Remove completely\n"
     printf "\n"
@@ -188,6 +212,7 @@ main() {
     get_latest_version
     install_binary
     setup_daemon
+    setup_login
     setup_shell_alias
     verify_setup
     print_complete
