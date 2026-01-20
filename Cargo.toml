@@ -20,8 +20,8 @@ hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 
-# HTTP client for forwarding requests
-reqwest = { version = "0.12", features = ["rustls-tls", "stream"] }
+# HTTP client for forwarding requests (uses native-tls to avoid rustls version conflicts)
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "stream", "json"] }
 
 # TLS/SSL
 rustls = { version = "0.23", features = ["ring"] }
@@ -52,6 +52,9 @@ daemonize = "0.5"
 # Error handling
 anyhow = "1"
 thiserror = "1"
+
+# UUID generation for request IDs
+uuid = { version = "1", features = ["v4"] }
 
 # Unix utilities
 libc = "0.2"

@@ -14,11 +14,14 @@ use std::convert::Infallible;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
+use crate::api::{truncate_body, InterceptRequestPayload, InterceptResponsePayload};
+use crate::api_client::{create_api_client, ApiClient};
 use crate::ca;
 use crate::config;
 
@@ -209,7 +212,10 @@ impl ResolvesServerCert for SniCertResolver {
 
 /// Shared state for the proxy
 struct ProxyState {
+    /// HTTP client for forwarding requests to upstream
     client: Client,
+    /// API client for guardrail checks and logging
+    api_client: Arc<ApiClient>,
 }
 
 /// Run the proxy server
@@ -219,6 +225,17 @@ pub async fn run() -> Result<()> {
 
     info!("Starting CopilotGuard proxy on {}", addr);
 
+    // Create API client for guardrail checks
+    let api_client = create_api_client(&config)?;
+
+    if api_client.has_api_key() {
+        info!("API key configured - guardrails and logging enabled");
+        info!("Fail mode: {}", config.api_fail_mode);
+        info!("Guardrail timeout: {}ms", config.guardrail_timeout_ms);
+    } else {
+        info!("No API key configured - running in passthrough mode");
+    }
+
     // Create HTTP client for forwarding requests
     // Uses custom DNS resolver to bypass local hosts file
     let client = Client::builder()
@@ -226,7 +243,7 @@ pub async fn run() -> Result<()> {
         .dns_resolver(Arc::new(BypassResolver::new()))
         .build()?;
 
-    let state = Arc::new(ProxyState { client });
+    let state = Arc::new(ProxyState { client, api_client });
 
     // Load TLS config with SNI-based certificate selection
     let tls_config = create_tls_config(config.intercept_domains.clone())?;
@@ -302,9 +319,13 @@ async fn handle_request(
 /// Forward the request to the real destination
 async fn forward_request(
     req: Request<hyper::body::Incoming>,
-    peer_addr: SocketAddr,
+    _peer_addr: SocketAddr,
     state: Arc<ProxyState>,
 ) -> Result<Response<Full<Bytes>>> {
+    // Generate unique request ID for correlation
+    let request_id = Uuid::new_v4().to_string();
+    let start_time = Instant::now();
+
     let method = req.method().clone();
     let uri = req.uri().clone();
     let headers = req.headers().clone();
@@ -319,7 +340,7 @@ async fn forward_request(
     let path = uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let target_url = format!("https://{}{}", host, path);
 
-    info!("[{}] {} {} -> {}", peer_addr, method, uri, target_url);
+    info!("[{}] {} {} -> {}", request_id, method, uri, target_url);
 
     // Read the request body
     let body_bytes = req.collect().await?.to_bytes();
@@ -327,20 +348,60 @@ async fn forward_request(
     // Log request details for debugging (truncate large bodies)
     if !body_bytes.is_empty() {
         let body_preview = if body_bytes.len() > 200 {
-            format!("{}... ({} bytes)",
+            format!(
+                "{}... ({} bytes)",
                 String::from_utf8_lossy(&body_bytes[..200]),
-                body_bytes.len())
+                body_bytes.len()
+            )
         } else {
             String::from_utf8_lossy(&body_bytes).to_string()
         };
-        debug!("Request body: {}", body_preview);
+        debug!("[{}] Request body: {}", request_id, body_preview);
     }
 
+    // === GUARDRAIL CHECK ===
+    // Build request headers map (sanitized - no auth tokens sent to API)
+    let mut headers_map = HashMap::new();
+    for (name, value) in headers.iter() {
+        let name_str = name.as_str().to_lowercase();
+        // Skip sensitive headers
+        if name_str != "authorization" && name_str != "x-github-token" {
+            if let Ok(v) = value.to_str() {
+                headers_map.insert(name_str, v.to_string());
+            }
+        }
+    }
+
+    let check_payload = InterceptRequestPayload {
+        request_id: request_id.clone(),
+        method: method.to_string(),
+        host: host.to_string(),
+        path: path.to_string(),
+        headers: headers_map,
+        body: truncate_body(&body_bytes),
+    };
+
+    // Check guardrails before forwarding
+    let (blocked, reason) = state.api_client.check_request(check_payload).await;
+
+    if blocked {
+        let reason_msg = reason.unwrap_or_else(|| "Request blocked by policy".to_string());
+        warn!("[{}] BLOCKED: {}", request_id, reason_msg);
+
+        return Ok(Response::builder()
+            .status(403)
+            .header("Content-Type", "application/json")
+            .header("X-CopilotGuard-Request-Id", &request_id)
+            .body(Full::new(Bytes::from(format!(
+                r#"{{"error": "blocked", "reason": "{}", "request_id": "{}"}}"#,
+                reason_msg, request_id
+            ))))
+            .unwrap());
+    }
+
+    // === FORWARD REQUEST ===
     // Build the forwarding request
-    let mut forward_req = state.client.request(
-        method.clone(),
-        &target_url,
-    );
+    let mut forward_req = state.client.request(method.clone(), &target_url);
 
     // Copy headers (except Host which reqwest sets automatically)
     for (name, value) in headers.iter() {
@@ -371,11 +432,33 @@ async fn forward_request(
     // Read response body
     let resp_body = response.bytes().await?;
 
+    // Calculate latency
+    let latency_ms = start_time.elapsed().as_millis() as u64;
+
     // Log response
-    info!("[{}] Response: {} ({} bytes)", peer_addr, status, resp_body.len());
+    info!(
+        "[{}] Response: {} ({} bytes, {}ms)",
+        request_id,
+        status,
+        resp_body.len(),
+        latency_ms
+    );
+
+    // === LOG RESPONSE ASYNC ===
+    // Fire-and-forget - doesn't block response delivery
+    let log_payload = InterceptResponsePayload {
+        request_id: request_id.clone(),
+        status_code: status.as_u16(),
+        latency_ms,
+        body: truncate_body(&resp_body),
+    };
+    state.api_client.log_response(log_payload);
 
     // Build response to return to client
     let mut builder = Response::builder().status(status.as_u16());
+
+    // Add our request ID header
+    builder = builder.header("X-CopilotGuard-Request-Id", &request_id);
 
     // Copy response headers
     for (name, value) in resp_headers.iter() {

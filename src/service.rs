@@ -124,10 +124,15 @@ pub fn stop() -> Result<()> {
 pub fn status() -> Result<String> {
     #[cfg(target_os = "macos")]
     {
-        // Best check: try to connect to the proxy
+        // Check if something is listening on port 443
+        // Use --resolve to provide SNI so proxy accepts the connection
         let output = Command::new("curl")
-            .args(["-k", "-s", "-o", "/dev/null", "-w", "%{http_code}",
-                   "--connect-timeout", "1", "https://127.0.0.1:8443/"])
+            .args([
+                "-k", "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                "--connect-timeout", "1",
+                "--resolve", "api.githubcopilot.com:443:127.0.0.1",
+                "https://api.githubcopilot.com/"
+            ])
             .output();
 
         if let Ok(out) = output {

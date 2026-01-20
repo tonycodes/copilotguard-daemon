@@ -11,6 +11,14 @@ pub struct Config {
     /// Organization API key (optional, can use OAuth session)
     pub api_key: Option<String>,
 
+    /// Fail mode when API is unreachable: "open" (allow) or "closed" (block)
+    #[serde(default = "default_fail_mode")]
+    pub api_fail_mode: String,
+
+    /// Timeout in milliseconds for guardrail checks
+    #[serde(default = "default_guardrail_timeout")]
+    pub guardrail_timeout_ms: u64,
+
     /// Local proxy port
     pub proxy_port: u16,
 
@@ -27,11 +35,21 @@ pub struct Config {
     pub ca_key_path: Option<PathBuf>,
 }
 
+fn default_fail_mode() -> String {
+    "open".to_string()
+}
+
+fn default_guardrail_timeout() -> u64 {
+    2000
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             api_url: "https://api.guard.tony.codes".to_string(),
             api_key: None,
+            api_fail_mode: default_fail_mode(),
+            guardrail_timeout_ms: default_guardrail_timeout(),
             // Use port 443 so hosts file redirect works
             // (Copilot CLI connects to domains on standard HTTPS port)
             proxy_port: 443,
