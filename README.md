@@ -15,12 +15,14 @@ A lightweight, tool-agnostic daemon that intercepts and analyzes AI coding assis
 ### Quick Install (Recommended)
 
 ```bash
-# Download and install (includes CA setup and daemon)
 curl -sSL https://raw.githubusercontent.com/tonycodes/copilotguard-daemon/main/install.sh | sh
-
-# Or with Homebrew (macOS)
-brew install tonycodes/tap/copilotguard-daemon
 ```
+
+This single command will:
+1. Download the binary for your platform
+2. Install the daemon (CA certificate, hosts file, system service)
+3. **Open your browser to connect your CopilotGuard account**
+4. Configure everything automatically
 
 ### Manual Installation
 
@@ -31,17 +33,32 @@ brew install tonycodes/tap/copilotguard-daemon
    sudo copilotguard-daemon install
    ```
 
-This will:
-- Generate a local CA certificate
-- Add the CA to your system trust store
-- Modify `/etc/hosts` to redirect AI traffic
-- Install and start the system service
+3. Connect to your CopilotGuard account:
+   ```bash
+   copilotguard-daemon login
+   ```
+   This opens your browser where you'll enter a verification code to link your account.
+
+4. Restart the daemon to apply your API key:
+   ```bash
+   sudo launchctl bootout system/com.copilotguard.daemon
+   sudo launchctl bootstrap system /Library/LaunchDaemons/com.copilotguard.daemon.plist
+   ```
 
 ## Usage
 
 ```bash
-# Check status
+# Check daemon status
 copilotguard-daemon status
+
+# Test API connection
+copilotguard-daemon health
+
+# Login or switch accounts
+copilotguard-daemon login
+
+# Logout (clear credentials)
+copilotguard-daemon logout
 
 # View configuration
 copilotguard-daemon config
@@ -83,14 +100,17 @@ sudo copilotguard-daemon uninstall
 
 ## Configuration
 
-Configuration is stored at `~/.config/copilotguard/config.toml`:
+Configuration is stored at:
+- **macOS**: `~/Library/Application Support/copilotguard/config.toml`
+- **Linux**: `~/.config/copilotguard/config.toml`
+- **System (daemon)**: `/etc/copilotguard/config.toml`
 
 ```toml
 # CopilotGuard API endpoint
 api_url = "https://api.guard.tony.codes"
 
-# Your organization's API key (optional if using OAuth)
-api_key = "cg_your_key_here"
+# API key (automatically set by 'copilotguard-daemon login')
+api_key = "cg_xxxxx"
 
 # Local proxy port (must be 443 for hosts file interception)
 proxy_port = 443
@@ -196,8 +216,9 @@ sudo copilotguard-daemon trust-ca
 ```bash
 sudo copilotguard-daemon uninstall
 rm -rf ~/.config/copilotguard
+rm -rf ~/Library/Application\ Support/copilotguard  # macOS only
 # Then reinstall
-sudo copilotguard-daemon install
+curl -sSL https://raw.githubusercontent.com/tonycodes/copilotguard-daemon/main/install.sh | sh
 ```
 
 ## Development Documentation
