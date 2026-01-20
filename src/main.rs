@@ -293,10 +293,23 @@ async fn main() -> Result<()> {
 
                                         println!("✓ Authorization successful!");
                                         println!("✓ API key saved to configuration");
+
+                                        // Restart daemon to apply new API key
                                         println!();
-                                        println!("Restart the daemon to apply changes:");
-                                        println!("  sudo launchctl bootout system/com.copilotguard.daemon");
-                                        println!("  sudo launchctl bootstrap system /Library/LaunchDaemons/com.copilotguard.daemon.plist");
+                                        println!("Restarting daemon to apply changes...");
+                                        if let Err(e) = service::stop() {
+                                            // Daemon might not be running, that's ok
+                                            tracing::debug!("Stop returned: {}", e);
+                                        }
+                                        match service::start() {
+                                            Ok(()) => println!("✓ Daemon restarted successfully"),
+                                            Err(e) => {
+                                                println!("⚠ Could not restart daemon: {}", e);
+                                                println!("  You may need to restart manually with:");
+                                                println!("  sudo launchctl bootout system/com.copilotguard.daemon");
+                                                println!("  sudo launchctl bootstrap system /Library/LaunchDaemons/com.copilotguard.daemon.plist");
+                                            }
+                                        }
                                         break;
                                     } else {
                                         anyhow::bail!("Authorization succeeded but no API key received");
