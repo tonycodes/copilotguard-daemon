@@ -237,26 +237,32 @@ async fn main() -> Result<()> {
                 println!("│                                         │");
                 println!("└─────────────────────────────────────────┘");
                 println!();
-                println!("Open: {}", device_auth.verification_url_complete);
+                // Use complete URL if available, otherwise base URL
+                let open_url = if device_auth.verification_url_complete.is_empty() {
+                    &device_auth.verification_url
+                } else {
+                    &device_auth.verification_url_complete
+                };
+                println!("Open: {}", open_url);
                 println!();
 
                 // Try to open browser
                 #[cfg(target_os = "macos")]
                 {
                     let _ = std::process::Command::new("open")
-                        .arg(&device_auth.verification_url_complete)
+                        .arg(open_url)
                         .spawn();
                 }
                 #[cfg(target_os = "linux")]
                 {
                     let _ = std::process::Command::new("xdg-open")
-                        .arg(&device_auth.verification_url_complete)
+                        .arg(open_url)
                         .spawn();
                 }
                 #[cfg(target_os = "windows")]
                 {
                     let _ = std::process::Command::new("cmd")
-                        .args(["/c", "start", &device_auth.verification_url_complete])
+                        .args(["/c", "start", open_url])
                         .spawn();
                 }
 
@@ -297,7 +303,9 @@ async fn main() -> Result<()> {
                                     }
                                 }
                                 "expired" => {
-                                    anyhow::bail!("Authorization expired. Please try again.");
+                                    let msg = poll_response.message.as_deref()
+                                        .unwrap_or("Authorization expired. Please try again.");
+                                    anyhow::bail!("{}", msg);
                                 }
                                 "pending" => {
                                     // Still waiting, continue polling
@@ -305,7 +313,11 @@ async fn main() -> Result<()> {
                                     std::io::Write::flush(&mut std::io::stdout())?;
                                 }
                                 status => {
-                                    anyhow::bail!("Unexpected authorization status: {}", status);
+                                    let msg = poll_response.message.as_deref()
+                                        .or(poll_response.error.as_deref())
+                                        .map(|m| format!(": {}", m))
+                                        .unwrap_or_default();
+                                    anyhow::bail!("Unexpected authorization status: {}{}", status, msg);
                                 }
                             }
                         }
