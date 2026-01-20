@@ -181,45 +181,138 @@ async fn main() -> Result<()> {
         }
 
         Commands::Login { key } => {
-            let api_key = if let Some(k) = key {
-                k
-            } else {
-                // Interactive prompt
-                print!("Enter your CopilotGuard API key: ");
-                std::io::Write::flush(&mut std::io::stdout())?;
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input)?;
-                input.trim().to_string()
-            };
+            // If API key provided directly, use it
+            if let Some(api_key) = key {
+                if api_key.is_empty() {
+                    anyhow::bail!("API key cannot be empty");
+                }
 
-            if api_key.is_empty() {
-                anyhow::bail!("API key cannot be empty");
-            }
+                // Validate key format
+                if !api_key.starts_with("cg_") {
+                    println!("Warning: API key doesn't match expected format (cg_xxxxx)");
+                }
 
-            // Validate key format
-            if !api_key.starts_with("cg_") {
-                println!("Warning: API key doesn't match expected format (cg_xxxxx)");
-            }
+                // Save to config
+                let mut config = config::load()?;
+                config.api_key = Some(api_key.clone());
+                config::save(&config)?;
 
-            // Save to config
-            let mut config = config::load()?;
-            config.api_key = Some(api_key.clone());
-            config::save(&config)?;
-
-            // Test the key
-            let client = api_client::ApiClient::new(&config)?;
-            match client.health_check().await {
-                Ok(health) => {
-                    println!("✓ API key saved and verified");
-                    println!("  API Status: {}", health.status);
-                    if let Some(msg) = health.message {
-                        println!("  Message: {}", msg);
+                // Test the key
+                let client = api_client::ApiClient::new(&config)?;
+                match client.health_check().await {
+                    Ok(health) => {
+                        println!("✓ API key saved and verified");
+                        println!("  API Status: {}", health.status);
+                        if let Some(msg) = health.message {
+                            println!("  Message: {}", msg);
+                        }
+                    }
+                    Err(e) => {
+                        println!("✓ API key saved");
+                        println!("⚠ Could not verify key: {}", e);
+                        println!("  The key will be used when the API becomes available.");
                     }
                 }
-                Err(e) => {
-                    println!("✓ API key saved");
-                    println!("⚠ Could not verify key: {}", e);
-                    println!("  The key will be used when the API becomes available.");
+            } else {
+                // Use device authorization flow
+                let config = config::load()?;
+                let client = api_client::ApiClient::new(&config)?;
+
+                println!("Starting device authorization...\n");
+
+                // Start device flow
+                let device_auth = match client.start_device_auth().await {
+                    Ok(auth) => auth,
+                    Err(e) => {
+                        anyhow::bail!("Failed to start device authorization: {}", e);
+                    }
+                };
+
+                // Display the code
+                println!("┌─────────────────────────────────────────┐");
+                println!("│                                         │");
+                println!("│   Enter this code in your browser:      │");
+                println!("│                                         │");
+                println!("│            {}             │", device_auth.user_code);
+                println!("│                                         │");
+                println!("└─────────────────────────────────────────┘");
+                println!();
+                println!("Open: {}", device_auth.verification_url_complete);
+                println!();
+
+                // Try to open browser
+                #[cfg(target_os = "macos")]
+                {
+                    let _ = std::process::Command::new("open")
+                        .arg(&device_auth.verification_url_complete)
+                        .spawn();
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&device_auth.verification_url_complete)
+                        .spawn();
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/c", "start", &device_auth.verification_url_complete])
+                        .spawn();
+                }
+
+                println!("Waiting for authorization...");
+                println!("(Press Ctrl+C to cancel)\n");
+
+                // Poll for completion
+                let poll_interval = std::time::Duration::from_secs(device_auth.interval);
+                let timeout = std::time::Duration::from_secs(device_auth.expires_in);
+                let start = std::time::Instant::now();
+
+                loop {
+                    if start.elapsed() > timeout {
+                        anyhow::bail!("Authorization timed out. Please try again.");
+                    }
+
+                    tokio::time::sleep(poll_interval).await;
+
+                    match client.poll_device_auth(&device_auth.device_code).await {
+                        Ok(poll_response) => {
+                            match poll_response.status.as_str() {
+                                "authorized" => {
+                                    if let Some(api_key) = poll_response.api_key {
+                                        // Save the API key
+                                        let mut config = config::load()?;
+                                        config.api_key = Some(api_key);
+                                        config::save(&config)?;
+
+                                        println!("✓ Authorization successful!");
+                                        println!("✓ API key saved to configuration");
+                                        println!();
+                                        println!("Restart the daemon to apply changes:");
+                                        println!("  sudo launchctl bootout system/com.copilotguard.daemon");
+                                        println!("  sudo launchctl bootstrap system /Library/LaunchDaemons/com.copilotguard.daemon.plist");
+                                        break;
+                                    } else {
+                                        anyhow::bail!("Authorization succeeded but no API key received");
+                                    }
+                                }
+                                "expired" => {
+                                    anyhow::bail!("Authorization expired. Please try again.");
+                                }
+                                "pending" => {
+                                    // Still waiting, continue polling
+                                    print!(".");
+                                    std::io::Write::flush(&mut std::io::stdout())?;
+                                }
+                                status => {
+                                    anyhow::bail!("Unexpected authorization status: {}", status);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            anyhow::bail!("Error checking authorization status: {}", e);
+                        }
+                    }
                 }
             }
         }

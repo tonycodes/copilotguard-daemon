@@ -60,6 +60,38 @@ pub struct HealthResponse {
     pub message: Option<String>,
 }
 
+/// Response from starting a device authorization flow
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceAuthStartResponse {
+    /// Internal device code (used for polling)
+    pub device_code: String,
+    /// User-facing code to display
+    pub user_code: String,
+    /// URL where user should enter the code
+    pub verification_url: String,
+    /// URL with code pre-filled
+    pub verification_url_complete: String,
+    /// Seconds until the code expires
+    pub expires_in: u64,
+    /// Polling interval in seconds
+    pub interval: u64,
+}
+
+/// Response from polling device authorization status
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceAuthPollResponse {
+    /// Status: "pending", "authorized", or "expired"
+    pub status: String,
+    /// API key (only present when status is "authorized")
+    pub api_key: Option<String>,
+    /// Error code (if any)
+    pub error: Option<String>,
+    /// Human-readable message
+    pub message: Option<String>,
+}
+
 /// Maximum body size to send to API (1MB)
 pub const MAX_BODY_SIZE: usize = 1024 * 1024;
 

@@ -5,8 +5,8 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::api::{
-    HealthResponse, InterceptRequestPayload, InterceptRequestResponse,
-    InterceptResponsePayload, InterceptResponseResponse,
+    DeviceAuthPollResponse, DeviceAuthStartResponse, HealthResponse, InterceptRequestPayload,
+    InterceptRequestResponse, InterceptResponsePayload, InterceptResponseResponse,
 };
 use crate::config::Config;
 
@@ -249,6 +249,56 @@ impl ApiClient {
             .await?;
 
         Ok(response.status().is_success())
+    }
+
+    /// Start device authorization flow
+    /// Returns device code info for user to complete authorization
+    pub async fn start_device_auth(&self) -> Result<DeviceAuthStartResponse> {
+        let url = format!("{}/api/v1/auth/cli/device", self.api_url);
+
+        let response = self
+            .client
+            .post(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let body: DeviceAuthStartResponse = response.json().await?;
+            Ok(body)
+        } else {
+            anyhow::bail!(
+                "Failed to start device authorization: {}",
+                response.status()
+            )
+        }
+    }
+
+    /// Poll for device authorization status
+    /// Returns the status and API key when authorized
+    pub async fn poll_device_auth(&self, device_code: &str) -> Result<DeviceAuthPollResponse> {
+        let url = format!("{}/api/v1/auth/cli/device/{}", self.api_url, device_code);
+
+        let response = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let body: DeviceAuthPollResponse = response.json().await?;
+            Ok(body)
+        } else if response.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(DeviceAuthPollResponse {
+                status: "expired".to_string(),
+                api_key: None,
+                error: Some("invalid_device_code".to_string()),
+                message: Some("Device code not found or expired".to_string()),
+            })
+        } else {
+            anyhow::bail!("Failed to poll device authorization: {}", response.status())
+        }
     }
 }
 
