@@ -1,11 +1,15 @@
 [package]
 name = "copilotguard-daemon"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Lightweight daemon for intercepting and analyzing AI coding assistant traffic"
 license = "MIT"
 repository = "https://github.com/tonycodes/copilotguard-daemon"
 readme = "README.md"
+
+[lib]
+name = "copilotguard_daemon"
+path = "src/lib.rs"
 
 [[bin]]
 name = "copilotguard-daemon"
@@ -53,8 +57,22 @@ daemonize = "0.5"
 anyhow = "1"
 thiserror = "1"
 
+# Cryptography (policy signature verification)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+
+# Cryptography (policy cache encryption)
+chacha20poly1305 = "0.10"
+blake3 = "1"
+
+# Regex (heuristic pattern matching)
+regex = "1"
+
 # UUID generation for request IDs
 uuid = { version = "1", features = ["v4"] }
+
+# Async utilities
+pin-project-lite = "0.2"
 
 # Unix utilities
 libc = "0.2"
@@ -68,6 +86,10 @@ security-framework = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-service = "0.7"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
 
 [profile.release]
 opt-level = "z"     # Optimize for size
